@@ -1,0 +1,13 @@
+# === RAG Core Components ===
+llama-index             # High-level RAG framework to build the chatbot
+llama-index-embeddings-ollama      # Ollama integration for embedding models like nomic-embed-text
+langchain               # Toolset for chaining LLMs, retrievers, prompts, etc.
+faiss-cpu               # Vector store to store and retrieve document embeddings
+
+# === OCR for Screenshots ===
+pytesseract             # Python wrapper for the Tesseract OCR engine
+Pillow                  # Image loading and manipulation library (used with pytesseract)
+
+# === Local LLM Runtime ===
+ollama                  # Run local models like phi3, mistral, llama3, etc.
+

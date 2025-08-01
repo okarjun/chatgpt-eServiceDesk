@@ -1,0 +1,14 @@
+# Ignore Python virtual environment
+rag-env/
+
+# Ignore cached Python files
+__pycache__/
+*.pyc
+
+# Ignore local files
+*.log
+*.DS_Store
+
+# Ignore index and screenshots
+index/
+data/*.png
