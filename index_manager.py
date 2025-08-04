@@ -1,46 +1,61 @@
 # === index_manager.py ===
-# Purpose: Load a saved vector index OR build a new one from local knowledge base files
+# Purpose: Load a saved vector index OR build a new one from local knowledge base files,
+#          including text extracted from PDFs with screenshots using OCR.
 
 import os
 from llama_index.core import (
-    SimpleDirectoryReader,   # Reads PDF/TXT/DOCX/etc. from the /data folder
-    VectorStoreIndex,        # Core index that supports vector search
-    StorageContext,          # Manages saving/loading index state
-    load_index_from_storage  # Loads a previously saved index
+    VectorStoreIndex,         # Core index that supports vector search
+    StorageContext,           # Manages saving/loading index state
+    load_index_from_storage,  # Loads a previously saved index
+    Document                  # Schema for raw document content
 )
+
+from ocr_utils import extract_all_pdfs_from_folder  # OCR function for scanned/screenshot PDFs
 
 def get_or_build_index(embed_model, data_path="data", index_path="index"):
     """
-    Load or build a vector index from knowledge base files.
+    Load or build a vector index from the /data folder.
+
+    This version supports OCR for screenshots embedded in PDFs using PyMuPDF and Tesseract.
 
     Args:
-        embed_model: Embedding model to convert documents to vectors
-        data_path: Folder where your source files (PDFs, text) are stored
-        index_path: Folder where the processed vector index will be saved
+        embed_model: The embedding model used to convert text into vector format.
+        data_path (str): Path to folder containing knowledge base documents (PDF, DOCX, etc.).
+        index_path (str): Path to folder where the vector index will be stored.
 
     Returns:
-        An initialized VectorStoreIndex object that can be used in query engine
+        VectorStoreIndex: A searchable index for your RAG-based assistant.
 
     How it works:
-    - If /index exists → load the vector index directly (faster startup)
-    - Else → scan all files in /data, embed them, create index, and save it to /index
+    - If the index already exists, it loads from disk (fast startup).
+    - Otherwise, it:
+      1. Extracts content from ALL PDFs in /data (including OCR of screenshots),
+      2. Wraps them as `Document` objects,
+      3. Builds a fresh vector index,
+      4. Saves it to /index.
     """
 
     if os.path.exists(index_path):
         print(f"📦 Loading existing index from '{index_path}'...")
         storage_context = StorageContext.from_defaults(persist_dir=index_path)
-        index = load_index_from_storage(storage_context, embed_model=embed_model)
-    else:
-        print(f"📄 No index found. Building new index from '{data_path}'...")
-        documents = SimpleDirectoryReader(data_path).load_data()
-        print(f"✅ Loaded {len(documents)} documents.")
+        return load_index_from_storage(storage_context, embed_model=embed_model)
 
-        # Create a new vector index from document embeddings
-        index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
+    print(f"📄 No index found. Extracting documents from '{data_path}'...")
+    extracted = extract_all_pdfs_from_folder(data_path)
 
-        # Save to disk for future reuse
-        index.storage_context.persist(persist_dir=index_path)
-        print(f"💾 Index saved to '{index_path}'")
+    if not extracted:
+        raise RuntimeError(f"❌ No valid PDFs found in '{data_path}'.")
+
+    documents = [
+        Document(text=entry["content"], metadata={"file": entry["filename"]})
+        for entry in extracted if entry["content"].strip()
+    ]
+
+    print(f"✅ Extracted and processed {len(documents)} PDFs.")
+
+    index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
+    index.storage_context.persist(persist_dir=index_path)
+    print(f"💾 New index created and saved to '{index_path}'.")
 
     return index
 

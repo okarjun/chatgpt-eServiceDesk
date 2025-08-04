@@ -11,3 +11,7 @@ Pillow                  # Image loading and manipulation library (used with pyte
 # === Local LLM Runtime ===
 ollama                  # Run local models like phi3, mistral, llama3, etc.
 
+# PDF + OCR support
+PyMuPDF
+pdf2image
+
