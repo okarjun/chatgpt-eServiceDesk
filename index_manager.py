@@ -1,61 +1,97 @@
 # === index_manager.py ===
-# Purpose: Load a saved vector index OR build a new one from local knowledge base files,
-#          including text extracted from PDFs with screenshots using OCR.
+# Purpose: Incrementally update your vector index by adding only new or changed PDFs from /data
 
 import os
+import hashlib
+import json
 from llama_index.core import (
-    VectorStoreIndex,         # Core index that supports vector search
-    StorageContext,           # Manages saving/loading index state
-    load_index_from_storage,  # Loads a previously saved index
-    Document                  # Schema for raw document content
+    VectorStoreIndex,
+    StorageContext,
+    load_index_from_storage,
+    Document
 )
+from ocr_utils import extract_all_pdfs_from_folder
 
-from ocr_utils import extract_all_pdfs_from_folder  # OCR function for scanned/screenshot PDFs
+HASH_STORE = "index/file_hashes.json"
+
+def compute_file_hash(path):
+    """Return MD5 hash of a file for change detection"""
+    hasher = hashlib.md5()
+    with open(path, "rb") as f:
+        buf = f.read()
+        hasher.update(buf)
+    return hasher.hexdigest()
+
+def load_previous_hashes():
+    if os.path.exists(HASH_STORE):
+        with open(HASH_STORE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_hashes(hash_dict):
+    os.makedirs(os.path.dirname(HASH_STORE), exist_ok=True)
+    with open(HASH_STORE, "w") as f:
+        json.dump(hash_dict, f, indent=2)
 
 def get_or_build_index(embed_model, data_path="data", index_path="index"):
     """
-    Load or build a vector index from the /data folder.
-
-    This version supports OCR for screenshots embedded in PDFs using PyMuPDF and Tesseract.
-
-    Args:
-        embed_model: The embedding model used to convert text into vector format.
-        data_path (str): Path to folder containing knowledge base documents (PDF, DOCX, etc.).
-        index_path (str): Path to folder where the vector index will be stored.
-
-    Returns:
-        VectorStoreIndex: A searchable index for your RAG-based assistant.
-
-    How it works:
-    - If the index already exists, it loads from disk (fast startup).
-    - Otherwise, it:
-      1. Extracts content from ALL PDFs in /data (including OCR of screenshots),
-      2. Wraps them as `Document` objects,
-      3. Builds a fresh vector index,
-      4. Saves it to /index.
+    Incrementally build or update a vector index from PDFs in /data.
+    Only adds new or changed files using content hash comparison.
     """
+    print("📁 Scanning /data for new or updated PDFs...")
 
-    if os.path.exists(index_path):
-        print(f"📦 Loading existing index from '{index_path}'...")
+    # Compute current hashes
+    current_hashes = {}
+    file_paths = []
+
+    for root, _, files in os.walk(data_path):
+        for file in files:
+            if file.lower().endswith(".pdf"):
+                full_path = os.path.join(root, file)
+                file_paths.append(full_path)
+                current_hashes[full_path] = compute_file_hash(full_path)
+
+    # Load previously indexed hashes
+    previous_hashes = load_previous_hashes()
+
+    # Identify new or modified files
+    changed_files = [f for f in file_paths if current_hashes.get(f) != previous_hashes.get(f)]
+
+    if not os.path.exists(index_path):
+        print("🛠️ No existing index found. Creating new index...")
+        storage_context = StorageContext.from_defaults()
+        index = None
+    else:
+        print("📦 Loading existing index...")
         storage_context = StorageContext.from_defaults(persist_dir=index_path)
-        return load_index_from_storage(storage_context, embed_model=embed_model)
+        index = load_index_from_storage(storage_context, embed_model=embed_model)
 
-    print(f"📄 No index found. Extracting documents from '{data_path}'...")
-    extracted = extract_all_pdfs_from_folder(data_path)
+    if changed_files:
+        print(f"🆕 Found {len(changed_files)} new or changed file(s). Processing...")
 
-    if not extracted:
-        raise RuntimeError(f"❌ No valid PDFs found in '{data_path}'.")
+        # Extract OCR from only changed files
+        extracted = extract_all_pdfs_from_folder(data_path)
+        new_docs = [
+            Document(text=doc["content"], metadata={"file": doc["filename"]})
+            for doc in extracted
+            if doc["filename"] in changed_files and doc["content"].strip()
+        ]
 
-    documents = [
-        Document(text=entry["content"], metadata={"file": entry["filename"]})
-        for entry in extracted if entry["content"].strip()
-    ]
+        if index:
+            index.insert_documents(new_docs)
+        else:
+            index = VectorStoreIndex.from_documents(new_docs, embed_model=embed_model)
 
-    print(f"✅ Extracted and processed {len(documents)} PDFs.")
+        # Persist index and updated hash state
+        index.storage_context.persist(persist_dir=index_path)
+        save_hashes(current_hashes)
+        print(f"✅ Indexed and saved {len(new_docs)} documents to '{index_path}'.")
 
-    index = VectorStoreIndex.from_documents(documents, embed_model=embed_model)
-    index.storage_context.persist(persist_dir=index_path)
-    print(f"💾 New index created and saved to '{index_path}'.")
+    else:
+        if index:
+            print("✅ No changes found. Using existing index.")
+        else:
+            raise RuntimeError("❌ No existing index found and no new data to index.")
 
     return index
 
